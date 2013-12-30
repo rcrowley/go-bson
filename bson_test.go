@@ -1,18 +1,18 @@
 // BSON library for Go
-// 
+//
 // Copyright (c) 2010-2012 - Gustavo Niemeyer <gustavo@niemeyer.net>
-// 
+//
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met: 
-// 
+// modification, are permitted provided that the following conditions are met:
+//
 // 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer. 
+//    list of conditions and the following disclaimer.
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
-//    and/or other materials provided with the distribution. 
-// 
+//    and/or other materials provided with the distribution.
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 // ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 // WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -31,8 +31,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	. "launchpad.net/gocheck"
 	"labix.org/v2/mgo/bson"
+	. "launchpad.net/gocheck"
 	"net/url"
 	"reflect"
 	"testing"
@@ -353,6 +353,20 @@ func (s *S) TestUnmarshalStructSampleItems(c *C) {
 	}
 }
 
+func (s *S) Test64bitInt(c *C) {
+	var i int64 = (1 << 31)
+	if int(i) > 0 {
+		data, err := bson.Marshal(bson.M{"i": int(i)})
+		c.Assert(err, IsNil)
+		c.Assert(string(data), Equals, wrapInDoc("\x12i\x00\x00\x00\x00\x80\x00\x00\x00\x00"))
+
+		var result struct{ I int }
+		err = bson.Unmarshal(data, &result)
+		c.Assert(err, IsNil)
+		c.Assert(int64(result.I), Equals, i)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Generic two-way struct marshaling tests.
 
@@ -450,6 +464,14 @@ var marshalItems = []testItemType{
 		"\x0Aa\x00\x0Ac\x00\x0Ab\x00\x0Ad\x00\x0Af\x00\x08e\x00\x01"},
 	{&dOnIface{bson.D{{"a", nil}, {"c", nil}, {"b", nil}, {"d", true}}},
 		"\x03d\x00" + wrapInDoc("\x0Aa\x00\x0Ac\x00\x0Ab\x00\x08d\x00\x01")},
+
+	{bson.RawD{{"a", bson.Raw{0x0A, nil}}, {"c", bson.Raw{0x0A, nil}}, {"b", bson.Raw{0x08, []byte{0x01}}}},
+		"\x0Aa\x00" + "\x0Ac\x00" + "\x08b\x00\x01"},
+	{MyRawD{{"a", bson.Raw{0x0A, nil}}, {"c", bson.Raw{0x0A, nil}}, {"b", bson.Raw{0x08, []byte{0x01}}}},
+		"\x0Aa\x00" + "\x0Ac\x00" + "\x08b\x00\x01"},
+	{&dOnIface{bson.RawD{{"a", bson.Raw{0x0A, nil}}, {"c", bson.Raw{0x0A, nil}}, {"b", bson.Raw{0x08, []byte{0x01}}}}},
+		"\x03d\x00" + wrapInDoc("\x0Aa\x00"+"\x0Ac\x00"+"\x08b\x00\x01")},
+
 	{&ignoreField{"before", "ignore", "after"},
 		"\x02before\x00\a\x00\x00\x00before\x00\x02after\x00\x06\x00\x00\x00after\x00"},
 
@@ -510,9 +532,17 @@ var unmarshalItems = []testItemType{
 	{&bson.Raw{0x03, []byte(wrapInDoc("\x10byte\x00\x08\x00\x00\x00"))},
 		"\x10byte\x00\x08\x00\x00\x00"},
 
+	// RawD document.
+	{&struct{ bson.RawD }{bson.RawD{{"a", bson.Raw{0x0A, []byte{}}}, {"c", bson.Raw{0x0A, []byte{}}}, {"b", bson.Raw{0x08, []byte{0x01}}}}},
+		"\x03rawd\x00" + wrapInDoc("\x0Aa\x00\x0Ac\x00\x08b\x00\x01")},
+
 	// Decode old binary.
 	{bson.M{"_": []byte("old")},
 		"\x05_\x00\x07\x00\x00\x00\x02\x03\x00\x00\x00old"},
+
+	// Decode old binary without length. According to the spec, this shouldn't happen.
+	{bson.M{"_": []byte("old")},
+		"\x05_\x00\x03\x00\x00\x00\x02old"},
 }
 
 func (s *S) TestUnmarshalOneWayItems(c *C) {
@@ -552,9 +582,15 @@ var marshalErrorItems = []testItemType{
 	{bson.Raw{0x0A, []byte{}},
 		"Attempted to unmarshal Raw kind 10 as a document"},
 	{&inlineCantPtr{&struct{ A, B int }{1, 2}},
-		"Option ,inline needs a struct value field"},
+		"Option ,inline needs a struct value or map field"},
 	{&inlineDupName{1, struct{ A, B int }{2, 3}},
 		"Duplicated key 'a' in struct bson_test.inlineDupName"},
+	{&inlineDupMap{},
+		"Multiple ,inline maps in struct bson_test.inlineDupMap"},
+	{&inlineBadKeyMap{},
+		"Option ,inline needs a map with string keys in struct bson_test.inlineBadKeyMap"},
+	{&inlineMap{A: 1, M: map[string]interface{}{"a": 1}},
+		`Can't have key "a" in inlined map; conflicts with struct field`},
 }
 
 func (s *S) TestMarshalErrorItems(c *C) {
@@ -808,7 +844,6 @@ func (s *S) TestUnmarshalSetterSetZero(c *C) {
 	c.Assert(value, IsNil)
 }
 
-
 // --------------------------------------------------------------------------
 // Getter test cases.
 
@@ -903,6 +938,9 @@ type condInt struct {
 type condUInt struct {
 	V uint ",omitempty"
 }
+type condFloat struct {
+	V float64 ",omitempty"
+}
 type condIface struct {
 	V interface{} ",omitempty"
 }
@@ -920,6 +958,9 @@ type namedCondStr struct {
 }
 type condTime struct {
 	V time.Time ",omitempty"
+}
+type condStruct struct {
+	V struct{ A []int } ",omitempty"
 }
 
 type shortInt struct {
@@ -948,19 +989,44 @@ type inlineDupName struct {
 	A int
 	V struct{ A, B int } ",inline"
 }
+type inlineMap struct {
+	A int
+	M map[string]interface{} ",inline"
+}
+type inlineMapInt struct {
+	A int
+	M map[string]int ",inline"
+}
+type inlineMapMyM struct {
+	A int
+	M MyM ",inline"
+}
+type inlineDupMap struct {
+	M1 map[string]interface{} ",inline"
+	M2 map[string]interface{} ",inline"
+}
+type inlineBadKeyMap struct {
+	M map[int]int ",inline"
+}
 
-type MyBytes []byte
-type MyBool bool
-type MyD []bson.DocElem
-type MyM map[string]interface{}
+type (
+	MyString string
+	MyBytes  []byte
+	MyBool   bool
+	MyD      []bson.DocElem
+	MyRawD   []bson.RawDocElem
+	MyM      map[string]interface{}
+)
 
-var truevar = true
-var falsevar = false
+var (
+	truevar  = true
+	falsevar = false
 
-var int64var = int64(42)
-var int64ptr = &int64var
-var intvar = int(42)
-var intptr = &intvar
+	int64var = int64(42)
+	int64ptr = &int64var
+	intvar   = int(42)
+	intptr   = &intvar
+)
 
 func parseURL(s string) *url.URL {
 	u, err := url.Parse(s)
@@ -1076,6 +1142,7 @@ var twoWayCrossItems = []crossTypeItem{
 	{&condInt{}, map[string]int{}},
 	{&condUInt{1}, map[string]uint{"v": 1}},
 	{&condUInt{}, map[string]uint{}},
+	{&condFloat{}, map[string]int{}},
 	{&condStr{"yo"}, map[string]string{"v": "yo"}},
 	{&condStr{}, map[string]string{}},
 	{&condStrNS{"yo"}, map[string]string{"v": "yo"}},
@@ -1094,6 +1161,9 @@ var twoWayCrossItems = []crossTypeItem{
 	{&condTime{time.Unix(123456789, 123e6)}, map[string]time.Time{"v": time.Unix(123456789, 123e6)}},
 	{&condTime{}, map[string]string{}},
 
+	{&condStruct{struct{ A []int }{[]int{1}}}, bson.M{"v": bson.M{"a": []interface{}{1}}}},
+	{&condStruct{struct{ A []int }{}}, bson.M{}},
+
 	{&namedCondStr{"yo"}, map[string]string{"myv": "yo"}},
 	{&namedCondStr{}, map[string]string{}},
 
@@ -1110,6 +1180,11 @@ var twoWayCrossItems = []crossTypeItem{
 	{&shortNonEmptyInt{}, map[string]interface{}{}},
 
 	{&inlineInt{struct{ A, B int }{1, 2}}, map[string]interface{}{"a": 1, "b": 2}},
+	{&inlineMap{A: 1, M: map[string]interface{}{"b": 2}}, map[string]interface{}{"a": 1, "b": 2}},
+	{&inlineMap{A: 1, M: nil}, map[string]interface{}{"a": 1}},
+	{&inlineMapInt{A: 1, M: map[string]int{"b": 2}}, map[string]int{"a": 1, "b": 2}},
+	{&inlineMapInt{A: 1, M: nil}, map[string]int{"a": 1}},
+	{&inlineMapMyM{A: 1, M: MyM{"b": MyM{"c": 3}}}, map[string]interface{}{"a": 1, "b": map[string]interface{}{"c": 3}}},
 
 	// []byte <=> MyBytes
 	{&struct{ B MyBytes }{[]byte("abc")}, map[string]string{"b": "abc"}},
@@ -1137,16 +1212,25 @@ var twoWayCrossItems = []crossTypeItem{
 	{&bson.D{{"a", bson.D{{"b", 1}, {"c", 2}}}}, &bson.D{{"a", bson.D{{"b", 1}, {"c", 2}}}}},
 	{&bson.D{{"a", bson.D{{"b", 1}, {"c", 2}}}}, &MyD{{"a", MyD{{"b", 1}, {"c", 2}}}}},
 
+	// bson.RawD <=> []RawDocElem
+	{&bson.RawD{{"a", bson.Raw{0x08, []byte{0x01}}}}, &bson.RawD{{"a", bson.Raw{0x08, []byte{0x01}}}}},
+	{&bson.RawD{{"a", bson.Raw{0x08, []byte{0x01}}}}, &MyRawD{{"a", bson.Raw{0x08, []byte{0x01}}}}},
+
 	// bson.M <=> map
 	{bson.M{"a": bson.M{"b": 1, "c": 2}}, MyM{"a": MyM{"b": 1, "c": 2}}},
 	{bson.M{"a": bson.M{"b": 1, "c": 2}}, map[string]interface{}{"a": map[string]interface{}{"b": 1, "c": 2}}},
+
+	// bson.M <=> map[MyString]
+	{bson.M{"a": bson.M{"b": 1, "c": 2}}, map[MyString]interface{}{"a": map[MyString]interface{}{"b": 1, "c": 2}}},
 }
 
 // Same thing, but only one way (obj1 => obj2).
 var oneWayCrossItems = []crossTypeItem{
 	// map <=> struct
-	{map[string]interface{}{"a": 1, "b": "2", "c": 3},
-		map[string]int{"a": 1, "c": 3}},
+	{map[string]interface{}{"a": 1, "b": "2", "c": 3}, map[string]int{"a": 1, "c": 3}},
+
+	// inline map elides badly typed values
+	{map[string]interface{}{"a": 1, "b": "2", "c": 3}, &inlineMapInt{A: 1, M: map[string]int{"c": 3}}},
 
 	// Can't decode int into struct.
 	{bson.M{"a": bson.M{"b": 2}}, &struct{ A bool }{}},
@@ -1188,6 +1272,21 @@ func (s *S) TestObjectIdHex(c *C) {
 	id := bson.ObjectIdHex("4d88e15b60f486e428412dc9")
 	c.Assert(id.String(), Equals, `ObjectIdHex("4d88e15b60f486e428412dc9")`)
 	c.Assert(id.Hex(), Equals, "4d88e15b60f486e428412dc9")
+}
+
+func (s *S) TestIsObjectIdHex(c *C) {
+	test := []struct {
+		id    string
+		valid bool
+	}{
+		{"4d88e15b60f486e428412dc9", true},
+		{"4d88e15b60f486e428412dc", false},
+		{"4d88e15b60f486e428412dc9e", false},
+		{"4d88e15b60f486e428412dcx", false},
+	}
+	for _, t := range test {
+		c.Assert(bson.IsObjectIdHex(t.id), Equals, t.valid)
+	}
 }
 
 // --------------------------------------------------------------------------
