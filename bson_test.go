@@ -31,7 +31,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"labix.org/v2/mgo/bson"
+	"github.com/rcrowley/go-bson" // "labix.org/v2/mgo/bson"
 	. "launchpad.net/gocheck"
 	"net/url"
 	"reflect"
