@@ -36,6 +36,14 @@ import (
 	"time"
 )
 
+// InterfaceGetBSON is a function that, if non-nil, is called when marshaling
+// struct fields with interface types to give the caller the opportunity to
+// preserve type information.
+//
+// The Getter interface is not sufficient in this instance because it's too
+// easy to end up in infinite mutual recursion.
+var InterfaceGetBSON func(interface{}) (interface{}, error)
+
 // --------------------------------------------------------------------------
 // Some internal infrastructure.
 
@@ -128,10 +136,12 @@ func (e *encoder) addMap(v reflect.Value) {
 }
 
 func (e *encoder) addStruct(v reflect.Value) {
-	sinfo, err := getStructInfo(v.Type())
+	t := v.Type()
+	sinfo, err := getStructInfo(t)
 	if err != nil {
 		panic(err)
 	}
+	var sf reflect.StructField
 	var value reflect.Value
 	if sinfo.InlineMap >= 0 {
 		m := v.Field(sinfo.InlineMap)
@@ -147,11 +157,21 @@ func (e *encoder) addStruct(v reflect.Value) {
 	}
 	for _, info := range sinfo.FieldsList {
 		if info.Inline == nil {
+			sf = t.Field(info.Num)
 			value = v.Field(info.Num)
 		} else {
+			sf = t.FieldByIndex(info.Inline)
 			value = v.FieldByIndex(info.Inline)
 		}
 		if info.OmitEmpty && isZero(value) {
+			continue
+		}
+		if reflect.Interface == sf.Type.Kind() && nil != InterfaceGetBSON {
+			i, err := InterfaceGetBSON(value.Interface())
+			if nil != err {
+				panic(err)
+			}
+			e.addElem(info.Key, reflect.ValueOf(i), info.MinSize)
 			continue
 		}
 		e.addElem(info.Key, value, info.MinSize)

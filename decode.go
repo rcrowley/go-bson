@@ -36,6 +36,14 @@ import (
 	"time"
 )
 
+// InterfaceSetBSON is a function that, if non-nil, is called when unmarshaling
+// struct fields with interface types to give the caller the opportunity to
+// preserve type information.
+//
+// The Setter interface is not sufficient in this instance because it's too
+// easy to end up in infinite mutual recursion.
+var InterfaceSetBSON func(interface{}, Raw) error
+
 type decoder struct {
 	in      []byte
 	i       int
@@ -543,12 +551,19 @@ func (d *decoder) readElemTo(out reflect.Value, kind byte) (good bool) {
 		return false
 	}
 
+	outk := outt.Kind()
+
+	if reflect.Interface == outk && nil != InterfaceSetBSON {
+		return nil != InterfaceSetBSON(
+			out.Addr().Interface(),
+			Raw{kind, d.in[start:d.i]},
+		)
+	}
+
 	if in == nil {
 		out.Set(reflect.Zero(outt))
 		return true
 	}
-
-	outk := outt.Kind()
 
 	// Dereference and initialize pointer if necessary.
 	first := true
