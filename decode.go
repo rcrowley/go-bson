@@ -488,6 +488,14 @@ func (d *decoder) readElemTo(out reflect.Value, kind byte) (good bool) {
 		} else {
 			in = b
 		}
+
+		if reflect.Interface == out.Type().Kind() && nil != InterfaceSetBSON {
+			return nil == InterfaceSetBSON(
+				out.Addr().Interface(),
+				Raw{kind, d.in[start:d.i]},
+			)
+		}
+
 	case 0x06: // Undefined (obsolete, but still seen in the wild)
 		in = Undefined
 	case 0x07: // ObjectId
@@ -551,19 +559,12 @@ func (d *decoder) readElemTo(out reflect.Value, kind byte) (good bool) {
 		return false
 	}
 
-	outk := outt.Kind()
-
-	if reflect.Interface == outk && nil != InterfaceSetBSON {
-		return nil != InterfaceSetBSON(
-			out.Addr().Interface(),
-			Raw{kind, d.in[start:d.i]},
-		)
-	}
-
 	if in == nil {
 		out.Set(reflect.Zero(outt))
 		return true
 	}
+
+	outk := outt.Kind()
 
 	// Dereference and initialize pointer if necessary.
 	first := true
