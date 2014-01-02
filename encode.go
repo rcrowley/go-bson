@@ -241,7 +241,16 @@ func (e *encoder) addSlice(v reflect.Value) {
 		return
 	}
 	for i := 0; i < l; i++ {
-		e.addElem(itoa(i), v.Index(i), false)
+		vi := v.Index(i)
+		if reflect.Interface == vi.Type().Kind() && nil != InterfaceGetBSON {
+			iface, err := InterfaceGetBSON(vi.Interface())
+			if nil != err {
+				panic(err)
+			}
+			e.addElem(itoa(i), reflect.ValueOf(iface), false)
+			continue
+		}
+		e.addElem(itoa(i), vi, false)
 	}
 }
 
